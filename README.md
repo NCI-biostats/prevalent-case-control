@@ -1,5 +1,5 @@
 
-*Analysis of case-control studies with incident and prevalent cases*
+**Analysis of case-control studies with incident and prevalent cases**
 
 For details and examples on how to run glm.prev.cc() visit http://rpubs.com/NCI-biostats/prevalent-case-control
 
