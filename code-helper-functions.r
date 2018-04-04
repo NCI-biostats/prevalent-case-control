@@ -6,6 +6,110 @@
 #####################################
 
 
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# set.program.control(...)
+#  this function generates a list of parameters and settings that are needed for fitting the model
+#  the list is passed to all functions.
+#
+# data should have at least the following columns:
+#   case.status    0 = control, 1 = incident case, 2 = prevalent case
+#   backward.time  numeric ranging from >= 0
+#   all covariates listed in logistic.vars and survival.vars
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+set.program.control <- function(data,            # one entry per individual
+                                logistic.vars,   # list of names, as in the dataset
+                                survival.vars = NULL,   # list of names, as in the dataset
+                                const.bh = F,
+                                param.vec.fitting.start.values = NULL,
+                                xi.a = NULL,
+                                print.ok = F){
+
+    # data shouldn't contain any NA's
+    if(sum(is.na(data)) > 0){
+        print('The data cannot have any missing values')
+    }
+
+    ix.0 <- data$case.status == 0
+    ix.1 <- data$case.status == 1
+    ix.2 <- data$case.status == 2
+
+    n0 <- sum(ix.0)
+    n1 <- sum(ix.1)
+    n2 <- sum(ix.2)
+
+    # column indices of the covariates in the dataset, order should correspond to the parameter vectors below
+    logistic.x.col.ix <- which(colnames(data) %in% logistic.vars)
+    survival.x.col.ix <- which(colnames(data) %in% survival.vars)
+
+    # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    # !!! CAUTION - THIS PART NOT GENERAL !!!
+    # used by the asymptotic variance functions
+    # ie. assumes that covariates passed to the logistic and survival submodels are the same
+    x.col.ix <- logistic.x.col.ix
+    # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+    param.vec.logistic <- paste(colnames(data)[logistic.x.col.ix], '.cc.inc.cc.prev', sep = '')
+    param.vec.survival <- paste(colnames(data)[survival.x.col.ix], '.cc.surv.gamma', sep = '')
+
+    if(const.bh){ # edit the covariate names so that they can be "grepped" by the fitting functions
+        param.vec.fitting.names <-  c('lb0.cc.inc', 'nu0.cc.prev', param.vec.logistic, 'k2.scale.baseline.haz', param.vec.survival)
+        param.vec.fitting.names.nice <- c('alpha', 'nu', logistic.vars, 'k2.scale', survival.vars)
+        n.bh.params <- 1
+    }else{ # Weibull
+        param.vec.fitting.names <-  c('lb0.cc.inc', 'nu0.cc.prev', param.vec.logistic, 'k1.shape.baseline.haz', 'k2.scale.baseline.haz', param.vec.survival)
+        param.vec.fitting.names.nice <- c('alpha', 'nu', logistic.vars, 'k1.shape', 'k2.scale', survival.vars)
+        n.bh.params <- 2
+    }
+    if(is.null(param.vec.fitting.start.values)){
+        param.vec.fitting.start.values <- rep.int(0.1, length(param.vec.fitting.names))
+    }
+
+    if(n2 == 0){ # no survival part and no nu*
+        ix <- c(1,3:(3+length(logistic.x.col.ix)-1))
+        param.vec.fitting.start.values <- param.vec.fitting.start.values[ix]
+        param.vec.fitting.names        <- param.vec.fitting.names[ix]
+        param.vec.fitting.names.nice   <- param.vec.fitting.names.nice[ix]
+    }
+
+    if(is.null(xi.a)){
+        ix <- data$case.status == 2
+        xi.a <- max(data$backward.time[ix])*1.01
+        rm(ix)
+    }
+
+    # update the data control object
+    data.control      <- list(n0 = n0,
+                              n1 = n1,
+                              n2 = n2,
+                              ix.0 = ix.0,
+                              ix.1 = ix.1,
+                              ix.2 = ix.2,
+                              N = n0 + n1 + n2,
+                              logistic.vars = logistic.vars,
+                              survival.vars = survival.vars,
+                              logistic.x.col.ix = logistic.x.col.ix,
+                              survival.x.col.ix = survival.x.col.ix,
+                              x.col.ix = x.col.ix, # used by the asy variance
+                              xi.a = xi.a,
+                              param.vec.fitting.start.values = param.vec.fitting.start.values,
+                              param.vec.fitting.names = param.vec.fitting.names,
+                              param.vec.fitting.names.nice = param.vec.fitting.names.nice,
+                              print.ok = print.ok,
+                              const.bh = const.bh,
+                              n.bh.params = n.bh.params)
+
+    return(data.control)
+}
+
+
+
+
+
+
+
+###########################################################
+# GLM.PREV.CC
+#
 # data should have at least the following columns:
 #   case.status    0 = control, 1 = incident case, 2 = prevalent case
 #   backward.time  numeric ranging from >= 0
@@ -15,6 +119,7 @@
 glm.prev.cc <- function(data,
                         logistic.vars,
                         survival.vars,
+                        const.bh = F,   # const.bh = constant baseline hazard, 1 parameter, if FALSE = Weibull, 2 parameters
                         se.type = NULL, # 'asy', 'jack', 'boot', or NULL (no SEs)
                         param.vec.fitting.start.values = NULL,
                         optim.method = 'L-BFGS-B', #method = 'BFGS',
@@ -27,12 +132,13 @@ glm.prev.cc <- function(data,
         formula.inc <- as.formula(paste('case.status ~ ', paste(logistic.vars, collapse = ' + ')))
         m.i         <- glm(formula.inc, data = data, subset = case.status < 2, family = binomial())
         ests.inc    <- summary(m.i)$coef[-1, 1]
-        param.vec.fitting.start.values = c(-2, -4, ests.inc, 1, 1, rep(-0.1, length(survival.vars)))
+        param.vec.fitting.start.values = c(-2, -4, ests.inc, rep(1, ifelse(const.bh, 1, 2)), rep(-0.1, length(survival.vars)))
     }
 
     pc <- set.program.control(data = data,
                               logistic.vars = logistic.vars,
                               survival.vars = survival.vars,
+                              const.bh = const.bh,
                               param.vec.fitting.start.values = param.vec.fitting.start.values,
                               xi.a = xi.a,
                               print.ok = print.ok)
@@ -40,8 +146,8 @@ glm.prev.cc <- function(data,
     # performs minimization of the log likelihood, if not converging, try tweaking the start values of this function
     optimx.out <- try(optimx(pc$param.vec.fitting.start.values, fn = constrained.likelihood, hessian = T,
                              method = optim.method,
-                             lower = c(rep(-Inf, length(pc$logistic.vars)+2), 0.1, 0.1, rep(-Inf, length(pc$survival.vars))), # just constrain the Weibull baseline hazard parameters
-                             upper = rep(Inf, length(pc$logistic.vars)+2+length(pc$survival.vars)+2),
+                             lower = c(rep(-Inf, length(pc$logistic.vars) + 2), rep(0.1, pc$n.bh.params), rep(-Inf, length(pc$survival.vars))), # just constrain the constant/Weibull baseline hazard parameters
+                             upper = rep(Inf, length(pc$logistic.vars) + 2 + pc$n.bh.params + length(pc$survival.vars)),
                              control = list(fnscale = 1),
                              data = data,
                              pc = pc)) # BFGS, Nelder-Mead, CG
@@ -56,20 +162,20 @@ glm.prev.cc <- function(data,
         out <- list(ests = ests, loglik = loglik)
 
         # now get the SEs of the estimates
-        if(is.null(se.type)){
+        if(is.null(se.type)){ # no SEs are to be estimated
             out <- c(out, list(ses = rep(NA, length(out$ests)))) # ests, loglik, ses = NA
-        }else if(se.type == 'jack'){
-            m.p.jack <- glm.prev.cc.jack(data = data, logistic.vars = logistic.vars, survival.vars = survival.vars, param.vec.fitting.start.values =  as.numeric(ests),
+        }else if(se.type == 'jack'){ # jackknife
+            m.p.jack <- glm.prev.cc.jack(data = data, logistic.vars = logistic.vars, survival.vars = survival.vars, const.bh = const.bh, param.vec.fitting.start.values =  as.numeric(ests),
                                          optim.method = optim.method, xi.a = xi.a)
             out <- c(out, m.p.jack) # ests, loglik, ses, i.succ, conv.prop
-        }else if(se.type == 'asy'){
+        }else if(se.type == 'asy'){ # asymptotic
             inner    <- get.avar(data = data, pc = pc, param.ests = ests)
             hess <- matrix(unlist(attr(optimx.out, "details")[optim.method ,"nhatend"]), ncol = length(pc$param.vec.fitting.start.values))
             hess.inv <- solve(hess)
             asy.var <- hess.inv %*% inner %*% hess.inv
             out <- c(out, list(ses = sqrt(diag(asy.var)))) # ests, loglik, ses
         }else if(se.type == 'boot'){
-            m.p.boot<- glm.prev.cc.boot(data = data, logistic.vars = logistic.vars, survival.vars = survival.vars, param.vec.fitting.start.values =  as.numeric(ests),
+            m.p.boot<- glm.prev.cc.boot(data = data, logistic.vars = logistic.vars, survival.vars = survival.vars, const.bh = const.bh, param.vec.fitting.start.values =  as.numeric(ests),
                                         optim.method = optim.method, xi.a = xi.a, boot = boot)
             out <- c(out, m.p.boot) # ests, loglik, ses, quant.025, quant.975, conv.prop
         }else{
@@ -163,6 +269,7 @@ beta.x <- function(param.vec, data, pc, ix.type = NULL, param.type = NULL){
 }
 
 
+
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 # in:
 # pattern   = string grep pattern to search for the parameters of interest
@@ -190,12 +297,17 @@ get.param.val <- function(pattern, param.vec, pc){
 get.theta <- function(param.vec, data, pc, ix.type){
     ix     <- get.ix(ix.type, data)
 
-    kappas <- get.param.val('weibull', param.vec, pc)                     # kappas: shape, scale
+    kappas <- get.param.val('baseline.haz', param.vec, pc)                # kappas: shape, scale (Weibull), scale only (const)
     gammas <- get.param.val('gamma', param.vec, pc)                       # gammas
 
     x.mx   <- as.matrix(data[ix, pc$survival.x.col.ix])                    # x covariates in ix (sum(ix) x p_s)
 
-    theta  <- (1/kappas[2])^kappas[1] * exp(x.mx %*% gammas)     # n2 x 1
+    if(pc$const.bh){
+        theta  <- (1/kappas) * exp(x.mx %*% gammas)     # n2 x 1
+    }else{
+        theta  <- (1/kappas[2])^kappas[1] * exp(x.mx %*% gammas)     # n2 x 1
+    }
+
     return(theta)
 }
 
@@ -206,16 +318,28 @@ get.theta <- function(param.vec, data, pc, ix.type){
 # out: mu(x) [length = sum(ix)]
 get.mu.x <- function(param.vec, data, pc, ix.type){
     theta       <- get.theta(param.vec, data, pc, ix.type) # (1/k2)^k1 * exp(x*gamma)
-    k1          <- get.param.val('weibull', param.vec, pc)[1]
+    if(pc$const.bh){
+        rescaling   <- 1/theta
+        upper.limit <- pc$xi.a
 
-    rescaling   <- gamma(1/k1)/(k1 * theta^(1/k1))
-    upper.limit <- pc$xi.a^k1
+        mu.x.part   <- matrix(NA, nrow = length(theta), ncol = 1)
+        for(i in 1:length(theta)){
+            mu.x.part[i] <- pgamma(upper.limit, shape = 1, rate = theta[i], lower.tail = TRUE)
+        }
+        mu.x        <- mu.x.part * rescaling
 
-    mu.x.part   <- matrix(NA, nrow = length(theta), ncol = 1)
-    for(i in 1:length(theta)){
-        mu.x.part[i] <- pgamma(upper.limit, shape = 1/k1, rate = theta[i], lower.tail = TRUE)
+    }else{ # weibull
+        k1          <- get.param.val('baseline.haz', param.vec, pc)[1]
+
+        rescaling   <- gamma(1/k1)/(k1 * theta^(1/k1))
+        upper.limit <- pc$xi.a^k1
+
+        mu.x.part   <- matrix(NA, nrow = length(theta), ncol = 1)
+        for(i in 1:length(theta)){
+            mu.x.part[i] <- pgamma(upper.limit, shape = 1/k1, rate = theta[i], lower.tail = TRUE)
+        }
+        mu.x        <- mu.x.part * rescaling
     }
-    mu.x        <- mu.x.part * rescaling
     return(mu.x)
 }
 
@@ -227,102 +351,15 @@ get.mu.x <- function(param.vec, data, pc, ix.type){
 get.surv.a <- function(param.vec, data, pc, ix.type){
     ix     <- get.ix(ix.type, data)
     theta  <- get.theta(param.vec, data, pc, ix.type)  # (1/k2)^k1 * exp(x*gamma)
-    k1     <- get.param.val('weibull', param.vec, pc)[1]
+    if(pc$const.bh){
+        k1     <- 1 # not estimated in this case
+    }else{
+        k1     <- get.param.val('baseline.haz', param.vec, pc)[1]
+    }
     a      <- data$backward.time[ix]
 
     return(exp(-a^k1 * theta))
 }
-
-
-
-
-# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-# set.program.control(...)
-#  this function generates a list of settings that are needed for fitting the model
-#
-# data should have at least the following columns:
-#   case.status    0 = control, 1 = incident case, 2 = prevalent case
-#   backward.time  numeric ranging from >= 0
-#   all covariates listed in logistic.vars and survival.vars
-# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-set.program.control <- function(data,            # one entry per individual
-                                logistic.vars,   # list of names, as in the dataset
-                                survival.vars = NULL,   # list of names, as in the dataset
-                                param.vec.fitting.start.values = NULL,
-                                xi.a = NULL,
-                                print.ok = F){
-
-    # data shouldn't contain any NA's
-    if(sum(is.na(data)) > 0){
-        print('The data cannot have any missing values')
-    }
-
-    ix.0 <- data$case.status == 0
-    ix.1 <- data$case.status == 1
-    ix.2 <- data$case.status == 2
-
-    n0 <- sum(ix.0)
-    n1 <- sum(ix.1)
-    n2 <- sum(ix.2)
-
-    # column indices of the covariates in the dataset, order should correspond to the parameter vectors below
-    logistic.x.col.ix <- which(colnames(data) %in% logistic.vars)
-    survival.x.col.ix <- which(colnames(data) %in% survival.vars)
-
-    # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-    # !!! CAUTION - THIS PART NOT GENERAL !!!
-    # used by the asymptotic variance functions
-    # ie. assumes that covariates passed to the logistic and survival submodels are the same
-    x.col.ix <- logistic.x.col.ix
-    # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-    param.vec.logistic <- paste(colnames(data)[logistic.x.col.ix], '.cc.inc.cc.prev', sep = '')
-    param.vec.survival <- paste(colnames(data)[survival.x.col.ix], '.cc.surv.gamma', sep = '')
-
-    # edit the covariate names so that they can be "grepped" by the fitting functions
-    param.vec.fitting.names <-  c('lb0.cc.inc', 'nu0.cc.prev',  param.vec.logistic, 'k1.shape.weibull', 'k2.scale.weibull', param.vec.survival)
-    param.vec.fitting.names.nice <- c('alpha', 'nu', logistic.vars, 'k1.shape', 'k2.scale', survival.vars)
-
-    if(is.null(param.vec.fitting.start.values)){
-        param.vec.fitting.start.values <- rep.int(0.1, length(param.vec.fitting.names))
-    }
-
-    if(n2 == 0){ # no survival part and no nu*
-        ix <- c(1,3:(3+length(logistic.x.col.ix)-1))
-        param.vec.fitting.start.values <- param.vec.fitting.start.values[ix]
-        param.vec.fitting.names        <- param.vec.fitting.names[ix]
-        param.vec.fitting.names.nice   <- param.vec.fitting.names.nice[ix]
-    }
-
-    if(is.null(xi.a)){
-        ix <- data$case.status == 2
-        xi.a <- max(data$backward.time[ix])*1.01
-        rm(ix)
-    }
-
-    # update the data control object
-    data.control      <- list(n0 = n0,
-                              n1 = n1,
-                              n2 = n2,
-                              ix.0 = ix.0,
-                              ix.1 = ix.1,
-                              ix.2 = ix.2,
-                              N = n0 + n1 + n2,
-                              logistic.vars = logistic.vars,
-                              survival.vars = survival.vars,
-                              logistic.x.col.ix = logistic.x.col.ix,
-                              survival.x.col.ix = survival.x.col.ix,
-                              x.col.ix = x.col.ix, # used by the asy variance
-                              xi.a = xi.a,
-                              param.vec.fitting.start.values = param.vec.fitting.start.values,
-                              param.vec.fitting.names = param.vec.fitting.names,
-                              param.vec.fitting.names.nice = param.vec.fitting.names.nice,
-                              print.ok = print.ok)
-
-    return(data.control)
-}
-
-
 
 
 
@@ -355,9 +392,73 @@ get.avar <- function(data, pc, param.ests = NULL){
 
 
 get.avar.all <- function(data, pc, param.ests = NULL){
+    if(pc$const.bh){
+        out <- get.avar.all.const(data, pc, param.ests)
+    }else{
+        out <- get.avar.all.weibull(data, pc, param.ests)
+    }
+    return(out)
+}
 
-    al <- param.ests[1] # + log(pc$cch.incident.sample.size/pc$cch.control.sample.size)
-    nu <- param.ests[2] # + log(pc$cch.prevalent.sample.size/pc$cch.control.sample.size)
+
+get.avar.all.const <- function(data, pc, param.ests = NULL){
+
+    al <- param.ests[1]
+    nu <- param.ests[2]
+    betas  <- matrix(param.ests[3:4], ncol = 1)
+    k2.scale <- matrix(param.ests[5], ncol = 1)
+    gammas <- matrix(param.ests[6:7], ncol = 1)
+
+    # INNER
+    ix0  <- data[, 'case.status'] == 0
+    ix1  <- data[, 'case.status'] == 1
+    ix2  <- data[, 'case.status'] == 2
+    x.mx <- as.matrix(data[, pc$x.col.ix])                       # vector length n0+n1+n2
+    a    <- data[, 'backward.time']                              # vector length n, n0 and n1 = 0, n2 = a|x
+
+    w1   <- exp(al + x.mx%*%betas)                               # vector length n0+n1+n2
+
+    mu.x <- get.mu.x(param.ests, data, pc, ix.type = 'all')
+    w2   <- exp(nu + x.mx%*%betas + log(mu.x))                   # k2 is free
+
+    eta <- 1 + w1 + w2                                           # vector length n0+n1+n2
+
+    d.dk2.scale.log.mu.x  <- jacobian(func = num.deriv.kappa.log.mu.x,  x = k2.scale, data = data, param.ests = param.ests, pc = pc)
+    d.dk2.scale.log.s.a.x <- jacobian(func = num.deriv.kappa.log.s.a.x, x = k2.scale, data = data, param.ests = param.ests, pc = pc)
+
+    d.dgammas.log.mu.x  <- jacobian(func = num.deriv.gamma.log.mu.x,  x = gammas, data = data, param.ests = param.ests, pc = pc)
+
+    dl.dtheta <- matrix(0, nrow = pc$N, ncol = 7) # const.bh = 7      # matrix n0+n1+n2 x n params
+
+    # alpha
+    dl.dtheta[,1] <- -w1/eta
+
+    # nu
+    dl.dtheta[,2] <- -w2/eta
+
+    # betas
+    dl.dtheta[,3:4] <- v2mx(-(w1+w2)/eta) * x.mx + x.mx * v2mx(vec = (ix1|ix2))  # k2 free
+
+    # k2.scale
+    dl.dtheta[,5] <- -w2/c(eta) * d.dk2.scale.log.mu.x + d.dk2.scale.log.s.a.x  # k2 free
+
+    # gammas
+    dl.dtheta[,6:7]   <- v2mx(-w2/eta) * d.dgammas.log.mu.x + v2mx(-(a/k2.scale)*exp(x.mx%*%gammas)) * x.mx   # ix2 is not necessary, a is 0 for ix0 and ix1
+
+    # add the pieces separately
+    inner <- pc$n0*cov(dl.dtheta[ix0,]) + pc$n1*cov(dl.dtheta[ix1,]) + pc$n2*cov(dl.dtheta[ix2,]) # CORRECT
+
+    return(inner = inner)
+}
+
+
+
+
+
+get.avar.all.weibull <- function(data, pc, param.ests = NULL){
+
+    al <- param.ests[1]
+    nu <- param.ests[2]
     betas  <- matrix(param.ests[3:4], ncol = 1)
     kappas <- matrix(param.ests[5:6], ncol = 1)
     gammas <- matrix(param.ests[7:8], ncol = 1)
@@ -396,7 +497,6 @@ get.avar.all <- function(data, pc, param.ests = NULL){
     dl.dtheta[,5:6] <- v2mx(-w2/eta) * d.dkappas.log.mu.x + d.dkappas.log.s.a.x  # k1, k2 free
 
     # gammas
-    # dl.dtheta[,7:8] <- x.mx*v2mx(w2/eta) - x.mx * v2mx(a*exp(x.mx%*%gammas))   # assumes k1 = k2 = 1, ix2 is not necessary, a is 0 for ix0 and ix1
     dl.dtheta[,7:8]   <- v2mx(-w2/eta) * d.dgammas.log.mu.x + v2mx(-(a/kappas[2])^kappas[1]*exp(x.mx%*%gammas)) * x.mx   # ix2 is not necessary, a is 0 for ix0 and ix1
 
     # add the pieces separately
@@ -407,7 +507,7 @@ get.avar.all <- function(data, pc, param.ests = NULL){
 
 
 
-
+# same for const and weibull
 get.avar.no.prev <- function(data, pc, param.ests = NULL){
 
     # if no prev, then no nu, and no kappas or gammas
@@ -439,8 +539,64 @@ get.avar.no.prev <- function(data, pc, param.ests = NULL){
 
 
 
-
 get.avar.no.inc <- function(data, pc, param.ests = NULL){
+    if(pc$const.bh){
+        out <- get.avar.no.inc.const(data, pc, param.ests)
+    }else{
+        out <- get.avar.no.inc.weibull(data, pc, param.ests)
+    }
+    return(out)
+}
+
+get.avar.no.inc.const <- function(data, pc, param.ests = NULL){
+
+    # if no incident, no alpha
+    nu <- param.ests[1] # + log(pc$cch.prevalent.sample.size/pc$cch.control.sample.size)
+    betas  <- matrix(param.ests[2:3], ncol = 1)
+    k2.scale <- matrix(param.ests[4], ncol = 1)
+    gammas <- matrix(param.ests[5:6], ncol = 1)
+
+    # INNER
+    ix0  <- data[, 'case.status'] == 0
+    ix2  <- data[, 'case.status'] == 2
+    x.mx <- as.matrix(data[, pc$x.col.ix])             # vector length n0+n1+n2
+    a    <- data[, 'backward.time'] # vector length n, n0 and n1 = 0, n2 = a|x
+
+    mu.x <- get.mu.x(param.ests, data, pc, ix.type = 'all')
+    w2   <- exp(nu + x.mx%*%betas + log(mu.x))
+
+    eta  <- 1 + w2                         # vector length n0+n1+n2
+
+    d.dk2.scale.log.mu.x  <- jacobian(func = num.deriv.kappa.log.mu.x, x = k2.scale, data = data, param.ests = param.ests, pc = pc)
+    d.dk2.scale.log.s.a.x <- jacobian(func = num.deriv.kappa.log.s.a.x, x = k2.scale, data = data, param.ests = param.ests, pc = pc)
+
+    d.dgammas.log.mu.x  <- jacobian(func = num.deriv.gamma.log.mu.x, x = gammas, data = data, param.ests = param.ests, pc = pc)
+
+
+    dl.dtheta <- matrix(0, nrow = pc$N, ncol = 7) # matrix n0+n1+n2 x n params
+
+    # nu
+    dl.dtheta[,1]   <- -w2/eta
+
+    # betas
+    dl.dtheta[,2:3] <- v2mx(-w2/eta) * x.mx + x.mx * v2mx(vec = ix2)
+
+    # k2.scale
+    dl.dtheta[,4] <- v2mx(-w2/eta) * d.dk2.scale.log.mu.x + d.dk2.scale.log.s.a.x
+
+    # gammas
+
+    dl.dtheta[,5:6] <- v2mx(-w2/eta) * d.dgammas.log.mu.x + v2mx(-(a/k2.scale)*exp(x.mx%*%gammas)) * x.mx  # ix2 is not necessary, a is 0 for ix0 and ix1
+
+    # add the pieces separately
+    inner <- pc$n0*cov(dl.dtheta[ix0,]) + pc$n2*cov(dl.dtheta[ix2,]) # CORRECT
+
+    return(inner = inner)
+}
+
+
+
+get.avar.no.inc.weibull <- function(data, pc, param.ests = NULL){
 
     # if no incident, no alpha
     nu <- param.ests[1] # + log(pc$cch.prevalent.sample.size/pc$cch.control.sample.size)
@@ -490,22 +646,56 @@ get.avar.no.inc <- function(data, pc, param.ests = NULL){
 
 
 
-# for kappas
+
+# for kappas (Weibull) or k2.scale (const)
 # only calculated for prevalent, the rest are 0 because backward time is 0 for all except prevalent cases
 num.deriv.kappa.log.s.a.x <- function(x, data, param.ests, pc){# }, ix.type = 'prevalent'){
     gammas <- get.param.val('gamma', param.ests, pc)
     x.mx   <- as.matrix(data[, pc$x.col.ix])
     a      <- data$backward.time
 
-    kappa.part <- (a/x[2])^x[1]
+    if(pc$const.bh){
+        kappa.part <- (a/x)
+    }else{
+        kappa.part <- (a/x[2])^x[1]
+    }
     log.s.a.x <- -kappa.part * exp(x.mx %*% gammas)
 
     return(log.s.a.x)
 }
 
 
-# for kappas
 num.deriv.kappa.log.mu.x <- function(x, data, param.ests, pc){
+    if(pc$const.bh){
+        out <- num.deriv.kappa.log.mu.x.const(x, data, param.ests, pc)
+    }else{
+        out <- num.deriv.kappa.log.mu.x.weibull(x, data, param.ests, pc)
+    }
+    return(out)
+}
+
+
+# for k2.scale for const
+num.deriv.kappa.log.mu.x.const <- function(x, data, param.ests, pc){
+    gammas <- get.param.val('gamma', param.ests, pc)
+    x.mx   <- as.matrix(data[, pc$x.col.ix])
+    theta  <- exp(x.mx %*% gammas)/c(x)
+
+    rescaling <- 1/theta
+    upper.limit <- pc$xi.a
+
+    mu.x.part <- matrix(NA, nrow = length(theta), ncol = 1)
+    for(i in 1:length(theta)){
+        mu.x.part[i] <- pgamma(upper.limit, shape = 1, rate = theta[i], lower.tail = TRUE)
+    }
+    log.mu.x <- log(mu.x.part * rescaling)
+    return(log.mu.x)
+}
+
+
+
+# for kappas (Weibull)
+num.deriv.kappa.log.mu.x.weibull <- function(x, data, param.ests, pc){
     gammas <- get.param.val('gamma', param.ests, pc)
     x.mx   <- as.matrix(data[, pc$x.col.ix])
     theta  <- (1/x[2])^x[1] * exp(x.mx %*% gammas)
@@ -524,7 +714,38 @@ num.deriv.kappa.log.mu.x <- function(x, data, param.ests, pc){
 
 
 num.deriv.gamma.log.mu.x <- function(x, data, param.ests, pc){
-    kappas <- get.param.val('weibull', param.ests, pc)
+    if(pc$const.bh){
+        out <- num.deriv.gamma.log.mu.x.const(x, data, param.ests, pc)
+    }else{
+        out <- num.deriv.gamma.log.mu.x.weibull(x, data, param.ests, pc)
+    }
+    return(out)
+}
+
+
+
+num.deriv.gamma.log.mu.x.const <- function(x, data, param.ests, pc){
+    k2.scale <- get.param.val('baseline.haz', param.ests, pc)
+
+    x.mx   <- as.matrix(data[, pc$x.col.ix])
+    theta  <- exp(x.mx[,1] + x.mx[,2] * c(x))/c(k2.scale)
+
+    rescaling <- 1/theta
+    upper.limit <- pc$xi.a
+
+    mu.x.part <- matrix(NA, nrow = length(theta), ncol = 1)
+    for(i in 1:length(theta)){
+        mu.x.part[i] <- pgamma(upper.limit, shape = 1, rate = theta[i], lower.tail = TRUE)
+    }
+    log.mu.x <- log(mu.x.part * rescaling)
+    return(log.mu.x)
+}
+
+
+
+
+num.deriv.gamma.log.mu.x.weibull <- function(x, data, param.ests, pc){
+    kappas <- get.param.val('baseline.haz', param.ests, pc)
     k1     <- kappas[1]
 
     x.mx   <- as.matrix(data[, pc$x.col.ix])
@@ -550,6 +771,14 @@ v2mx <- function(vec, n.cols = 2){
 }
 
 
+
+
+
+
+
+
+
+
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 # Bootstrap functions
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -563,6 +792,7 @@ v2mx <- function(vec, n.cols = 2){
 glm.prev.cc.boot <- function(data,
                              logistic.vars,
                              survival.vars,
+                             const.bh = F,
                              param.vec.fitting.start.values = NULL,
                              optim.method = 'L-BFGS-B',
                              xi.a = NULL,
@@ -570,12 +800,13 @@ glm.prev.cc.boot <- function(data,
                              boot = 500){
 
     if(is.null(param.vec.fitting.start.values)){
-        param.vec.fitting.start.values <- glm.prev.cc(data = data, logistic.vars = logistic.vars, survival.vars = survival.vars)$ests
+        param.vec.fitting.start.values <- glm.prev.cc(data = data, logistic.vars = logistic.vars, survival.vars = survival.vars, const.bh = const.bh)$ests
     }
 
     pc <- set.program.control(data = data,
                               logistic.vars = logistic.vars,
                               survival.vars = survival.vars,
+                              const.bh = const.bh,
                               param.vec.fitting.start.values = param.vec.fitting.start.values,
                               xi.a = xi.a,
                               print.ok = print.ok)
@@ -592,8 +823,8 @@ glm.prev.cc.boot <- function(data,
         optimx.out <- try(optimx(pc$param.vec.fitting.start.values,
                                  fn = constrained.likelihood,
                                  method = optim.method,
-                                 lower = c(rep(-Inf, length(pc$logistic.vars)+2), 0.1, 0.1, rep(-Inf, length(pc$survival.vars))),  # just constrain the Weibull baseline hazard parameters
-                                 upper = rep(Inf, length(pc$logistic.vars) + 2 + length(pc$survival.vars) + 2),
+                                 lower = c(rep(-Inf, length(pc$logistic.vars) + 2), rep(0.1, pc$n.bh.params), rep(-Inf, length(pc$survival.vars))), # just constrain the constant/Weibull baseline hazard parameters
+                                 upper = rep(Inf, length(pc$logistic.vars) + 2 + pc$n.bh.params + length(pc$survival.vars)),
                                  control = list(fnscale = 1),
                                  data = data.boot,
                                  pc = pc))
@@ -657,6 +888,14 @@ get.boot.sample <- function(data, pc){
 
 
 
+
+
+
+
+
+
+
+
 ######################################################################
 # JACKKNIFE
 ######################################################################
@@ -670,6 +909,7 @@ get.boot.sample <- function(data, pc){
 glm.prev.cc.jack <- function(data,
                              logistic.vars,
                              survival.vars,
+                             const.bh = F,
                              param.vec.fitting.start.values = NULL,
                              optim.method = 'L-BFGS-B',
                              xi.a = NULL,
@@ -677,12 +917,13 @@ glm.prev.cc.jack <- function(data,
 
 
     if(is.null(param.vec.fitting.start.values)){
-        param.vec.fitting.start.values <- glm.prev.cc(data = data, logistic.vars = logistic.vars, survival.vars = survival.vars)$ests
+        param.vec.fitting.start.values <- glm.prev.cc(data = data, logistic.vars = logistic.vars, survival.vars = survival.vars, const.bh = const.bh)$ests
     }
 
     pc <- set.program.control(data = data,
                               logistic.vars = logistic.vars,
                               survival.vars = survival.vars,
+                              const.bh = const.bh,
                               param.vec.fitting.start.values = param.vec.fitting.start.values,
                               xi.a = xi.a,
                               print.ok = print.ok)
@@ -699,8 +940,8 @@ glm.prev.cc.jack <- function(data,
         optimx.out <- try(optimx(pc$param.vec.fitting.start.values,
                                  fn = constrained.likelihood,
                                  method = optim.method,
-                                 lower = c(rep(-Inf, length(pc$logistic.vars)+2), 0.1, 0.1, rep(-Inf, length(pc$survival.vars))), # just constrain the Weibull baseline hazard parameters
-                                 upper = rep(Inf, length(pc$logistic.vars)+2+length(pc$survival.vars)+2),
+                                 lower = c(rep(-Inf, length(pc$logistic.vars) + 2), rep(0.1, pc$n.bh.params), rep(-Inf, length(pc$survival.vars))), # just constrain the constant/Weibull baseline hazard parameters
+                                 upper = rep(Inf, length(pc$logistic.vars) + 2 + pc$n.bh.params + length(pc$survival.vars)),
                                  control = list(fnscale = 1),
                                  data = data.jack,
                                  pc = pc))
