@@ -1,9 +1,9 @@
-#####################################
-# Marlena Maziarz                   #
-# March 29, 2018                    #
-# marlena.maziarz@nih.gov (current) #
-# marlenam@uw.edu (permanent)       #
-#####################################
+##########################################################
+# Marlena Maziarz (author and maintainer)                #
+# April 9, 2018                                          #
+# marlena.maziarz@nih.gov (current as of the date above) #
+# marlenam@uw.edu (permanent)                            #
+##########################################################
 
 
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -41,13 +41,6 @@ set.program.control <- function(data,            # one entry per individual
     logistic.x.col.ix <- which(colnames(data) %in% logistic.vars)
     survival.x.col.ix <- which(colnames(data) %in% survival.vars)
 
-    # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-    # !!! CAUTION - THIS PART NOT GENERAL !!!
-    # used by the asymptotic variance functions
-    # ie. assumes that covariates passed to the logistic and survival submodels are the same
-    x.col.ix <- logistic.x.col.ix
-    # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
     param.vec.logistic <- paste(colnames(data)[logistic.x.col.ix], '.cc.inc.cc.prev', sep = '')
     param.vec.survival <- paste(colnames(data)[survival.x.col.ix], '.cc.surv.gamma', sep = '')
 
@@ -55,10 +48,22 @@ set.program.control <- function(data,            # one entry per individual
         param.vec.fitting.names <-  c('lb0.cc.inc', 'nu0.cc.prev', param.vec.logistic, 'k2.scale.baseline.haz', param.vec.survival)
         param.vec.fitting.names.nice <- c('alpha', 'nu', logistic.vars, 'k2.scale', survival.vars)
         n.bh.params <- 1
+        ix.betas <- 1:length(param.vec.logistic) + 2
+        ix.kappas <- 1 + ix.betas[length(ix.betas)]
+        ix.gammas <- 1:length(param.vec.survival) + ix.kappas[length(ix.kappas)]
+
     }else{ # Weibull
         param.vec.fitting.names <-  c('lb0.cc.inc', 'nu0.cc.prev', param.vec.logistic, 'k1.shape.baseline.haz', 'k2.scale.baseline.haz', param.vec.survival)
         param.vec.fitting.names.nice <- c('alpha', 'nu', logistic.vars, 'k1.shape', 'k2.scale', survival.vars)
         n.bh.params <- 2
+        ix.betas <- 1:length(param.vec.logistic) + 2
+        ix.kappas <- 1:2 + ix.betas[length(ix.betas)]
+        ix.gammas <- 1:length(param.vec.survival) + ix.kappas[length(ix.kappas)]
+    }
+    if(print.ok){
+        print(ix.betas)
+        print(ix.kappas)
+        print(ix.gammas)
     }
     if(is.null(param.vec.fitting.start.values)){
         param.vec.fitting.start.values <- rep.int(0.1, length(param.vec.fitting.names))
@@ -89,7 +94,10 @@ set.program.control <- function(data,            # one entry per individual
                               survival.vars = survival.vars,
                               logistic.x.col.ix = logistic.x.col.ix,
                               survival.x.col.ix = survival.x.col.ix,
-                              x.col.ix = x.col.ix, # used by the asy variance
+                              x.col.ix = logistic.x.col.ix, # !!! CAUTION - THIS PART IS NOT GENERAL, used by the asymptotic variance functions, ie. assumes that covariates passed to the logistic and survival submodels are the same
+                              ix.betas = ix.betas,
+                              ix.kappas = ix.kappas,
+                              ix.gammas = ix.gammas,
                               xi.a = xi.a,
                               param.vec.fitting.start.values = param.vec.fitting.start.values,
                               param.vec.fitting.names = param.vec.fitting.names,
@@ -153,12 +161,12 @@ glm.prev.cc <- function(data,
                              pc = pc)) # BFGS, Nelder-Mead, CG
 
     if(class(optimx.out) == 'try-error'){ # optimization failed
-        print('optimx did not converge')
+        print('optimx did not converge in glm.prev.cc()')
         out <- NULL
     }else if(optimx.out$convcode == 0){ # successfully converged
         ests <- matrix(coef(optimx.out), ncol = 1)
         rownames(ests) <- pc$param.vec.fitting.names.nice
-        loglik <- -constrained.likelihood(ests, data, pc, print.loglik = T)
+        loglik <- -constrained.likelihood(ests, data, pc, print.loglik = print.ok)
         out <- list(ests = ests, loglik = loglik)
 
         # now get the SEs of the estimates
@@ -169,6 +177,7 @@ glm.prev.cc <- function(data,
                                          optim.method = optim.method, xi.a = xi.a)
             out <- c(out, m.p.jack) # ests, loglik, ses, i.succ, conv.prop
         }else if(se.type == 'asy'){ # asymptotic
+            print('NOTE: for se.type = "asy" the covariates for the logistic and survival submodels are assumed to be the same. Any covariate combination can be passed to se.type = "jack" or "boot".', q = F)
             inner    <- get.avar(data = data, pc = pc, param.ests = ests)
             hess <- matrix(unlist(attr(optimx.out, "details")[optim.method ,"nhatend"]), ncol = length(pc$param.vec.fitting.start.values))
             hess.inv <- solve(hess)
@@ -262,9 +271,6 @@ beta.x <- function(param.vec, data, pc, ix.type = NULL, param.type = NULL){
     }
 
     x.design.mx.logistic <- as.matrix(cbind(rep.int(1, sum(ix)), data[ix, pc$logistic.x.col.ix])) # sum(ix) x p_l
-    # as above, possibly faster:
-    # x.design.mx.logistic <- matrix(1, nrow = sum(ix), ncol = (length(pc$logistic.x.col.ix) + 1))
-    # x.design.mx.logistic[, -1] <- data[ix, pc$logistic.x.col.ix]
     return(x.design.mx.logistic %*% logistic.params)                                              # sum(ix) x 1
 }
 
@@ -307,7 +313,6 @@ get.theta <- function(param.vec, data, pc, ix.type){
     }else{
         theta  <- (1/kappas[2])^kappas[1] * exp(x.mx %*% gammas)     # n2 x 1
     }
-
     return(theta)
 }
 
@@ -319,27 +324,19 @@ get.theta <- function(param.vec, data, pc, ix.type){
 get.mu.x <- function(param.vec, data, pc, ix.type){
     theta       <- get.theta(param.vec, data, pc, ix.type) # (1/k2)^k1 * exp(x*gamma)
     if(pc$const.bh){
-        rescaling   <- 1/theta
-        upper.limit <- pc$xi.a
-
-        mu.x.part   <- matrix(NA, nrow = length(theta), ncol = 1)
-        for(i in 1:length(theta)){
-            mu.x.part[i] <- pgamma(upper.limit, shape = 1, rate = theta[i], lower.tail = TRUE)
-        }
-        mu.x        <- mu.x.part * rescaling
-
+        k1 <- 1
     }else{ # weibull
-        k1          <- get.param.val('baseline.haz', param.vec, pc)[1]
-
-        rescaling   <- gamma(1/k1)/(k1 * theta^(1/k1))
-        upper.limit <- pc$xi.a^k1
-
-        mu.x.part   <- matrix(NA, nrow = length(theta), ncol = 1)
-        for(i in 1:length(theta)){
-            mu.x.part[i] <- pgamma(upper.limit, shape = 1/k1, rate = theta[i], lower.tail = TRUE)
-        }
-        mu.x        <- mu.x.part * rescaling
+        k1 <- get.param.val('baseline.haz', param.vec, pc)[1]
     }
+    rescaling   <- gamma(1/k1)/(k1 * theta^(1/k1))
+    upper.limit <- pc$xi.a^k1
+
+    mu.x.part   <- matrix(NA, nrow = length(theta), ncol = 1)
+    for(i in 1:length(theta)){
+        mu.x.part[i] <- pgamma(upper.limit, shape = 1/k1, rate = theta[i], lower.tail = TRUE)
+    }
+    mu.x        <- mu.x.part * rescaling
+
     return(mu.x)
 }
 
@@ -365,12 +362,11 @@ get.surv.a <- function(param.vec, data, pc, ix.type){
 
 
 
-#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 # ANALYTIC VARIANCE FUNCTIONS
-# !!!!!!!!!!!!!!!!!!                 CAUTION                     !!!!!!!!!!!!!!!!
-# !!!!!!!!!!!!!!!!!! CURRENTLY THIS ONLY WORKS FOR 2 COVARIATES  !!!!!!!!!!!!!!!!
-# !!!!!! IN THE LOGISTIC AND SURVIVAL SUBMODELS WITH A WEIBULL BASELINE HAZARD !!
-#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# !!!!!!!!!!!!!!!!!!                 CAUTION                     !!!!!!!!!!!!!!!!!!!!!!!!!!!!
+# !!!!!! THE LOGISTIC AND SURVIVAL SUBMODELS MUST BE THE SAME FOR THE ANALYTICAL VARIANCE !!!
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 # ASYMPTOTIC VARIANCE ASSUMING CONSTANT HAZARD
 # E(dl/dtheta dl/dtheta')
@@ -391,77 +387,16 @@ get.avar <- function(data, pc, param.ests = NULL){
 
 
 
+
+
 get.avar.all <- function(data, pc, param.ests = NULL){
-    if(pc$const.bh){
-        out <- get.avar.all.const(data, pc, param.ests)
-    }else{
-        out <- get.avar.all.weibull(data, pc, param.ests)
-    }
-    return(out)
-}
-
-
-get.avar.all.const <- function(data, pc, param.ests = NULL){
 
     al <- param.ests[1]
     nu <- param.ests[2]
-    betas  <- matrix(param.ests[3:4], ncol = 1)
-    k2.scale <- matrix(param.ests[5], ncol = 1)
-    gammas <- matrix(param.ests[6:7], ncol = 1)
-
-    # INNER
-    ix0  <- data[, 'case.status'] == 0
-    ix1  <- data[, 'case.status'] == 1
-    ix2  <- data[, 'case.status'] == 2
-    x.mx <- as.matrix(data[, pc$x.col.ix])                       # vector length n0+n1+n2
-    a    <- data[, 'backward.time']                              # vector length n, n0 and n1 = 0, n2 = a|x
-
-    w1   <- exp(al + x.mx%*%betas)                               # vector length n0+n1+n2
-
-    mu.x <- get.mu.x(param.ests, data, pc, ix.type = 'all')
-    w2   <- exp(nu + x.mx%*%betas + log(mu.x))                   # k2 is free
-
-    eta <- 1 + w1 + w2                                           # vector length n0+n1+n2
-
-    d.dk2.scale.log.mu.x  <- jacobian(func = num.deriv.kappa.log.mu.x,  x = k2.scale, data = data, param.ests = param.ests, pc = pc)
-    d.dk2.scale.log.s.a.x <- jacobian(func = num.deriv.kappa.log.s.a.x, x = k2.scale, data = data, param.ests = param.ests, pc = pc)
-
-    d.dgammas.log.mu.x  <- jacobian(func = num.deriv.gamma.log.mu.x,  x = gammas, data = data, param.ests = param.ests, pc = pc)
-
-    dl.dtheta <- matrix(0, nrow = pc$N, ncol = 7) # const.bh = 7      # matrix n0+n1+n2 x n params
-
-    # alpha
-    dl.dtheta[,1] <- -w1/eta
-
-    # nu
-    dl.dtheta[,2] <- -w2/eta
-
-    # betas
-    dl.dtheta[,3:4] <- v2mx(-(w1+w2)/eta) * x.mx + x.mx * v2mx(vec = (ix1|ix2))  # k2 free
-
-    # k2.scale
-    dl.dtheta[,5] <- -w2/c(eta) * d.dk2.scale.log.mu.x + d.dk2.scale.log.s.a.x  # k2 free
-
-    # gammas
-    dl.dtheta[,6:7]   <- v2mx(-w2/eta) * d.dgammas.log.mu.x + v2mx(-(a/k2.scale)*exp(x.mx%*%gammas)) * x.mx   # ix2 is not necessary, a is 0 for ix0 and ix1
-
-    # add the pieces separately
-    inner <- pc$n0*cov(dl.dtheta[ix0,]) + pc$n1*cov(dl.dtheta[ix1,]) + pc$n2*cov(dl.dtheta[ix2,]) # CORRECT
-
-    return(inner = inner)
-}
-
-
-
-
-
-get.avar.all.weibull <- function(data, pc, param.ests = NULL){
-
-    al <- param.ests[1]
-    nu <- param.ests[2]
-    betas  <- matrix(param.ests[3:4], ncol = 1)
-    kappas <- matrix(param.ests[5:6], ncol = 1)
-    gammas <- matrix(param.ests[7:8], ncol = 1)
+    betas  <- matrix(param.ests[pc$ix.betas], ncol = 1)
+    kappas <- matrix(param.ests[pc$ix.kappas], ncol = 1) # const: 1 parameter, Weibull: 2 parameters
+    gammas <- matrix(param.ests[pc$ix.gammas], ncol = 1)
+    n.b.g <- length(betas) # gammas should be of the same length
 
     # INNER
     ix0  <- data[, 'case.status'] == 0
@@ -482,7 +417,7 @@ get.avar.all.weibull <- function(data, pc, param.ests = NULL){
 
     d.dgammas.log.mu.x  <- jacobian(func = num.deriv.gamma.log.mu.x,  x = gammas, data = data, param.ests = param.ests, pc = pc)
 
-    dl.dtheta <- matrix(0, nrow = pc$N, ncol = 8)                # matrix n0+n1+n2 x n params
+    dl.dtheta <- matrix(0, nrow = pc$N, ncol = length(pc$param.vec.fitting.names))                # matrix n0+n1+n2 x n params
 
     # alpha
     dl.dtheta[,1] <- -w1/eta
@@ -491,14 +426,22 @@ get.avar.all.weibull <- function(data, pc, param.ests = NULL){
     dl.dtheta[,2] <- -w2/eta
 
     # betas
-    dl.dtheta[,3:4] <- v2mx(-(w1+w2)/eta) * x.mx + x.mx * v2mx(vec = (ix1|ix2))  # k1, k2 free
+    dl.dtheta[,pc$ix.betas] <- v2mx(-(w1+w2)/eta, n.b.g) * x.mx + x.mx * v2mx(vec = (ix1|ix2), n.b.g)  # k1, k2 free
 
-    # kappas
-    dl.dtheta[,5:6] <- v2mx(-w2/eta) * d.dkappas.log.mu.x + d.dkappas.log.s.a.x  # k1, k2 free
 
-    # gammas
-    dl.dtheta[,7:8]   <- v2mx(-w2/eta) * d.dgammas.log.mu.x + v2mx(-(a/kappas[2])^kappas[1]*exp(x.mx%*%gammas)) * x.mx   # ix2 is not necessary, a is 0 for ix0 and ix1
+    if(pc$const.bh){
+        # kappas
+        dl.dtheta[, pc$ix.kappas] <- -w2/eta * d.dkappas.log.mu.x + d.dkappas.log.s.a.x  # k2 free
+        # gammas
+        dl.dtheta[,pc$ix.gammas]   <- v2mx(-w2/eta, n.b.g) * d.dgammas.log.mu.x + v2mx(-(a/c(kappas))*exp(x.mx%*%gammas), n.b.g) * x.mx   # ix2 is not necessary, a is 0 for ix0 and ix1
 
+    }else{ # Weibull
+        # kappas
+        dl.dtheta[, pc$ix.kappas] <- v2mx(-w2/eta) * d.dkappas.log.mu.x + d.dkappas.log.s.a.x  # k1, k2 free
+        # gammas
+        dl.dtheta[,pc$ix.gammas]   <- v2mx(-w2/eta, n.b.g) * d.dgammas.log.mu.x + v2mx(-(a/kappas[2])^kappas[1]*exp(x.mx%*%gammas), n.b.g) * x.mx   # ix2 is not necessary, a is 0 for ix0 and ix1
+
+    }
     # add the pieces separately
     inner <- pc$n0*cov(dl.dtheta[ix0,]) + pc$n1*cov(dl.dtheta[ix1,]) + pc$n2*cov(dl.dtheta[ix2,]) # CORRECT
 
@@ -511,8 +454,9 @@ get.avar.all.weibull <- function(data, pc, param.ests = NULL){
 get.avar.no.prev <- function(data, pc, param.ests = NULL){
 
     # if no prev, then no nu, and no kappas or gammas
-    al <- param.ests[1] # + log(pc$cch.incident.sample.size/pc$cch.control.sample.size)
-    betas  <- matrix(param.ests[2:3], ncol = 1)
+    al <- param.ests[1]
+    betas  <- matrix(param.ests[pc$ix.betas], ncol = 1)
+    n.b.g <- length(betas) # gammas should be of the same length
 
     # INNER
     ix0  <- data[, 'case.status'] == 0
@@ -523,13 +467,13 @@ get.avar.no.prev <- function(data, pc, param.ests = NULL){
     w1  <- exp(al + x.mx%*%betas)                      # vector length n0+n1+n2
     eta <- 1 + w1                                      # vector length n0+n1+n2
 
-    dl.dtheta <- matrix(0, nrow = pc$N, ncol = 3)      # matrix n0+n1+n2 x 4
+    dl.dtheta <- matrix(0, nrow = pc$N, ncol = length(pc$param.vec.fitting.names))      # matrix n0+n1+n2 x 4
 
     # alpha
     dl.dtheta[,1]   <- -w1/eta
 
     # betas
-    dl.dtheta[,2:3] <- v2mx(-w1/eta) * x.mx + x.mx * v2mx(vec = ix1)
+    dl.dtheta[,pc$ix.betas] <- v2mx(-w1/eta, n.b.g) * x.mx + x.mx * v2mx(vec = ix1, n.b.g)
 
     # add the pieces separately
     inner <- pc$n0*cov(dl.dtheta[ix0,]) + pc$n1*cov(dl.dtheta[ix1,]) # CORRECT
@@ -540,69 +484,13 @@ get.avar.no.prev <- function(data, pc, param.ests = NULL){
 
 
 get.avar.no.inc <- function(data, pc, param.ests = NULL){
-    if(pc$const.bh){
-        out <- get.avar.no.inc.const(data, pc, param.ests)
-    }else{
-        out <- get.avar.no.inc.weibull(data, pc, param.ests)
-    }
-    return(out)
-}
-
-get.avar.no.inc.const <- function(data, pc, param.ests = NULL){
 
     # if no incident, no alpha
-    nu <- param.ests[1] # + log(pc$cch.prevalent.sample.size/pc$cch.control.sample.size)
-    betas  <- matrix(param.ests[2:3], ncol = 1)
-    k2.scale <- matrix(param.ests[4], ncol = 1)
-    gammas <- matrix(param.ests[5:6], ncol = 1)
-
-    # INNER
-    ix0  <- data[, 'case.status'] == 0
-    ix2  <- data[, 'case.status'] == 2
-    x.mx <- as.matrix(data[, pc$x.col.ix])             # vector length n0+n1+n2
-    a    <- data[, 'backward.time'] # vector length n, n0 and n1 = 0, n2 = a|x
-
-    mu.x <- get.mu.x(param.ests, data, pc, ix.type = 'all')
-    w2   <- exp(nu + x.mx%*%betas + log(mu.x))
-
-    eta  <- 1 + w2                         # vector length n0+n1+n2
-
-    d.dk2.scale.log.mu.x  <- jacobian(func = num.deriv.kappa.log.mu.x, x = k2.scale, data = data, param.ests = param.ests, pc = pc)
-    d.dk2.scale.log.s.a.x <- jacobian(func = num.deriv.kappa.log.s.a.x, x = k2.scale, data = data, param.ests = param.ests, pc = pc)
-
-    d.dgammas.log.mu.x  <- jacobian(func = num.deriv.gamma.log.mu.x, x = gammas, data = data, param.ests = param.ests, pc = pc)
-
-
-    dl.dtheta <- matrix(0, nrow = pc$N, ncol = 7) # matrix n0+n1+n2 x n params
-
-    # nu
-    dl.dtheta[,1]   <- -w2/eta
-
-    # betas
-    dl.dtheta[,2:3] <- v2mx(-w2/eta) * x.mx + x.mx * v2mx(vec = ix2)
-
-    # k2.scale
-    dl.dtheta[,4] <- v2mx(-w2/eta) * d.dk2.scale.log.mu.x + d.dk2.scale.log.s.a.x
-
-    # gammas
-
-    dl.dtheta[,5:6] <- v2mx(-w2/eta) * d.dgammas.log.mu.x + v2mx(-(a/k2.scale)*exp(x.mx%*%gammas)) * x.mx  # ix2 is not necessary, a is 0 for ix0 and ix1
-
-    # add the pieces separately
-    inner <- pc$n0*cov(dl.dtheta[ix0,]) + pc$n2*cov(dl.dtheta[ix2,]) # CORRECT
-
-    return(inner = inner)
-}
-
-
-
-get.avar.no.inc.weibull <- function(data, pc, param.ests = NULL){
-
-    # if no incident, no alpha
-    nu <- param.ests[1] # + log(pc$cch.prevalent.sample.size/pc$cch.control.sample.size)
-    betas  <- matrix(param.ests[2:3], ncol = 1)
-    kappas <- matrix(param.ests[4:5], ncol = 1)
-    gammas <- matrix(param.ests[6:7], ncol = 1)
+    nu <- param.ests[1]
+    betas  <- matrix(param.ests[pc$ix.betas], ncol = 1)
+    kappas <- matrix(param.ests[pc$ix.kappas], ncol = 1) # const: 1 parameter, Weibull: 2 parameters
+    gammas <- matrix(param.ests[pc$ix.gammas], ncol = 1)
+    n.b.g <- length(betas) # gammas should be of the same length
 
     # INNER
     ix0  <- data[, 'case.status'] == 0
@@ -620,22 +508,26 @@ get.avar.no.inc.weibull <- function(data, pc, param.ests = NULL){
 
     d.dgammas.log.mu.x  <- jacobian(func = num.deriv.gamma.log.mu.x, x = gammas, data = data, param.ests = param.ests, pc = pc)
 
-
-    dl.dtheta <- matrix(0, nrow = pc$N, ncol = 7) # matrix n0+n1+n2 x n params
+    dl.dtheta <- matrix(0, nrow = pc$N, ncol = length(pc$param.vec.fitting.names)) # matrix n0+n1+n2 x n params
 
     # nu
     dl.dtheta[,1]   <- -w2/eta
 
     # betas
-    dl.dtheta[,2:3] <- v2mx(-w2/eta) * x.mx + x.mx * v2mx(vec = ix2)
-
-    # kappas
-    dl.dtheta[,4:5] <- v2mx(-w2/eta) * d.dkappas.log.mu.x + d.dkappas.log.s.a.x
+    dl.dtheta[,pc$ix.betas] <- v2mx(-w2/eta, n.b.g) * x.mx + x.mx * v2mx(vec = ix2, n.b.g)
 
     # gammas
-    # dl.dtheta[,6:7] <- x.mx*v2mx(w2/eta) - x.mx * v2mx(a*exp(x.mx%*%gammas))   # assumes k1 = k2 = 1, ix2 is not necessary, a is 0 for ix0 and ix1
-
-    dl.dtheta[,6:7] <- v2mx(-w2/eta) * d.dgammas.log.mu.x + v2mx(-(a/kappas[2])^kappas[1]*exp(x.mx%*%gammas)) * x.mx  # ix2 is not necessary, a is 0 for ix0 and ix1
+    if(pc$const.bh){
+        # kappas
+        dl.dtheta[,pc$ix.kappas] <- -w2/eta * d.dkappas.log.mu.x + d.dkappas.log.s.a.x
+        # gammas
+        dl.dtheta[,pc$ix.gammas] <- v2mx(-w2/eta, n.b.g) * d.dgammas.log.mu.x + v2mx(-(a/kappas)*exp(x.mx%*%gammas), n.b.g) * x.mx  # ix2 is not necessary, a is 0 for ix0 and ix1
+    }else{ # Weibull
+        # kappas
+        dl.dtheta[,pc$ix.kappas] <- v2mx(-w2/eta) * d.dkappas.log.mu.x + d.dkappas.log.s.a.x
+        # gammas
+        dl.dtheta[,pc$ix.gammas] <- v2mx(-w2/eta, n.b.g) * d.dgammas.log.mu.x + v2mx(-(a/kappas[2])^kappas[1]*exp(x.mx%*%gammas), n.b.g) * x.mx  # ix2 is not necessary, a is 0 for ix0 and ix1
+    }
 
     # add the pieces separately
     inner <- pc$n0*cov(dl.dtheta[ix0,]) + pc$n2*cov(dl.dtheta[ix2,]) # CORRECT
@@ -655,7 +547,7 @@ num.deriv.kappa.log.s.a.x <- function(x, data, param.ests, pc){# }, ix.type = 'p
     a      <- data$backward.time
 
     if(pc$const.bh){
-        kappa.part <- (a/x)
+        kappa.part <- (a/rep(x, length(a)))
     }else{
         kappa.part <- (a/x[2])^x[1]
     }
@@ -665,98 +557,69 @@ num.deriv.kappa.log.s.a.x <- function(x, data, param.ests, pc){# }, ix.type = 'p
 }
 
 
+
+
+# derivative for kappas (const and Weibull)
 num.deriv.kappa.log.mu.x <- function(x, data, param.ests, pc){
+    gammas <- get.param.val('gamma', param.ests, pc)
+    x.mx   <- as.matrix(data[, pc$x.col.ix])
     if(pc$const.bh){
-        out <- num.deriv.kappa.log.mu.x.const(x, data, param.ests, pc)
-    }else{
-        out <- num.deriv.kappa.log.mu.x.weibull(x, data, param.ests, pc)
-    }
-    return(out)
-}
+        theta  <- exp(x.mx %*% gammas)/c(x)
 
+        rescaling <- 1/theta
+        upper.limit <- pc$xi.a
 
-# for k2.scale for const
-num.deriv.kappa.log.mu.x.const <- function(x, data, param.ests, pc){
-    gammas <- get.param.val('gamma', param.ests, pc)
-    x.mx   <- as.matrix(data[, pc$x.col.ix])
-    theta  <- exp(x.mx %*% gammas)/c(x)
+        mu.x.part <- matrix(NA, nrow = length(theta), ncol = 1)
+        for(i in 1:length(theta)){
+            mu.x.part[i] <- pgamma(upper.limit, shape = 1, rate = theta[i], lower.tail = TRUE)
+        }
+    }else{ # Weibull
+        theta  <- (1/x[2])^x[1] * exp(x.mx %*% gammas)
 
-    rescaling <- 1/theta
-    upper.limit <- pc$xi.a
+        rescaling <- gamma(1/x[1])/(x[1] * theta^(1/x[1]))
+        upper.limit <- pc$xi.a^x[1]
 
-    mu.x.part <- matrix(NA, nrow = length(theta), ncol = 1)
-    for(i in 1:length(theta)){
-        mu.x.part[i] <- pgamma(upper.limit, shape = 1, rate = theta[i], lower.tail = TRUE)
-    }
-    log.mu.x <- log(mu.x.part * rescaling)
-    return(log.mu.x)
-}
-
-
-
-# for kappas (Weibull)
-num.deriv.kappa.log.mu.x.weibull <- function(x, data, param.ests, pc){
-    gammas <- get.param.val('gamma', param.ests, pc)
-    x.mx   <- as.matrix(data[, pc$x.col.ix])
-    theta  <- (1/x[2])^x[1] * exp(x.mx %*% gammas)
-
-    rescaling <- gamma(1/x[1])/(x[1] * theta^(1/x[1]))
-    upper.limit <- pc$xi.a^x[1]
-
-    mu.x.part <- matrix(NA, nrow = length(theta), ncol = 1)
-    for(i in 1:length(theta)){
-        mu.x.part[i] <- pgamma(upper.limit, shape = 1/x[1], rate = theta[i], lower.tail = TRUE)
+        mu.x.part <- matrix(NA, nrow = length(theta), ncol = 1)
+        for(i in 1:length(theta)){
+            mu.x.part[i] <- pgamma(upper.limit, shape = 1/x[1], rate = theta[i], lower.tail = TRUE)
+        }
     }
     log.mu.x <- log(mu.x.part * rescaling)
     return(log.mu.x)
 }
+
 
 
 
 num.deriv.gamma.log.mu.x <- function(x, data, param.ests, pc){
+
     if(pc$const.bh){
-        out <- num.deriv.gamma.log.mu.x.const(x, data, param.ests, pc)
-    }else{
-        out <- num.deriv.gamma.log.mu.x.weibull(x, data, param.ests, pc)
-    }
-    return(out)
-}
+        k2.scale <- get.param.val('baseline.haz', param.ests, pc)
 
+        x.mx   <- as.matrix(data[, pc$x.col.ix])
+        theta  <- exp(x.mx %*% x)/c(k2.scale)
 
+        rescaling <- 1/theta
+        upper.limit <- pc$xi.a
 
-num.deriv.gamma.log.mu.x.const <- function(x, data, param.ests, pc){
-    k2.scale <- get.param.val('baseline.haz', param.ests, pc)
+        mu.x.part <- matrix(NA, nrow = length(theta), ncol = 1)
+        for(i in 1:length(theta)){
+            mu.x.part[i] <- pgamma(upper.limit, shape = 1, rate = theta[i], lower.tail = TRUE)
+        }
+    }else{ # Weibull
+        kappas <- get.param.val('baseline.haz', param.ests, pc)
+        k1     <- kappas[1]
 
-    x.mx   <- as.matrix(data[, pc$x.col.ix])
-    theta  <- exp(x.mx[,1] + x.mx[,2] * c(x))/c(k2.scale)
+        x.mx   <- as.matrix(data[, pc$x.col.ix])
+        theta  <- (1/kappas[2])^k1 * exp(x.mx %*% x)
 
-    rescaling <- 1/theta
-    upper.limit <- pc$xi.a
+        rescaling <- gamma(1/k1)/(k1 * theta^(1/k1))
+        upper.limit <- pc$xi.a^k1
 
-    mu.x.part <- matrix(NA, nrow = length(theta), ncol = 1)
-    for(i in 1:length(theta)){
-        mu.x.part[i] <- pgamma(upper.limit, shape = 1, rate = theta[i], lower.tail = TRUE)
-    }
-    log.mu.x <- log(mu.x.part * rescaling)
-    return(log.mu.x)
-}
-
-
-
-
-num.deriv.gamma.log.mu.x.weibull <- function(x, data, param.ests, pc){
-    kappas <- get.param.val('baseline.haz', param.ests, pc)
-    k1     <- kappas[1]
-
-    x.mx   <- as.matrix(data[, pc$x.col.ix])
-    theta  <- (1/kappas[2])^k1 * exp(x.mx[,1] * x[1] + x.mx[,2] * x[2])
-
-    rescaling <- gamma(1/k1)/(k1 * theta^(1/k1))
-    upper.limit <- pc$xi.a^k1
-
-    mu.x.part <- matrix(NA, nrow = length(theta), ncol = 1)
-    for(i in 1:length(theta)){
-        mu.x.part[i] <- pgamma(upper.limit, shape = 1/k1, rate = theta[i], lower.tail = TRUE)
+        mu.x.part <- matrix(NA, nrow = length(theta), ncol = 1)
+        for(i in 1:length(theta)){
+            mu.x.part[i] <- pgamma(upper.limit, shape = 1/k1, rate = theta[i], lower.tail = TRUE)
+        }
     }
     log.mu.x <- log(mu.x.part * rescaling)
     return(log.mu.x)
@@ -769,10 +632,6 @@ num.deriv.gamma.log.mu.x.weibull <- function(x, data, param.ests, pc){
 v2mx <- function(vec, n.cols = 2){
     return(matrix(rep(vec, n.cols), ncol = n.cols, byrow = F))
 }
-
-
-
-
 
 
 
@@ -799,8 +658,15 @@ glm.prev.cc.boot <- function(data,
                              print.ok = F,
                              boot = 500){
 
+
     if(is.null(param.vec.fitting.start.values)){
-        param.vec.fitting.start.values <- glm.prev.cc(data = data, logistic.vars = logistic.vars, survival.vars = survival.vars, const.bh = const.bh)$ests
+        param.vec.fitting.start.values <- glm.prev.cc(data = data,
+                                                      logistic.vars = logistic.vars,
+                                                      survival.vars = survival.vars,
+                                                      const.bh = const.bh,
+                                                      optim.method = optim.method,
+                                                      xi.a = xi.a,
+                                                      print.ok = print.ok)$ests
     }
 
     pc <- set.program.control(data = data,
@@ -829,8 +695,8 @@ glm.prev.cc.boot <- function(data,
                                  data = data.boot,
                                  pc = pc))
 
-        if(class(optimx.out) == 'try-error'){
-            # do nothing, move on. this iteration will be counted as unsuccessful.
+        if(class(optimx.out) == 'try-error'){ # optimization failed
+            print('optimx did not converge in prev.glm.cc.boot()')
         }else if(optimx.out$convcode == 0){ # successful iteration
             i.succ <- i.succ + 1
             est.mx.boot[,i.succ] <- coef(optimx.out)
@@ -917,7 +783,13 @@ glm.prev.cc.jack <- function(data,
 
 
     if(is.null(param.vec.fitting.start.values)){
-        param.vec.fitting.start.values <- glm.prev.cc(data = data, logistic.vars = logistic.vars, survival.vars = survival.vars, const.bh = const.bh)$ests
+        param.vec.fitting.start.values <- glm.prev.cc(data = data,
+                                                      logistic.vars = logistic.vars,
+                                                      survival.vars = survival.vars,
+                                                      const.bh = const.bh,
+                                                      optim.method = optim.method,
+                                                      xi.a = xi.a,
+                                                      print.ok = print.ok)$ests
     }
 
     pc <- set.program.control(data = data,
@@ -946,8 +818,8 @@ glm.prev.cc.jack <- function(data,
                                  data = data.jack,
                                  pc = pc))
 
-        if(class(optimx.out) == 'try-error'){
-            # do nothing, move on. this iteration will be counted as unsuccessful.
+        if(class(optimx.out) == 'try-error'){ # optimization failed
+            print('optimx did not converge in prev.glm.cc.jack()')
         }else if(optimx.out$convcode == 0){ # successful iteration
             i.succ <- i.succ + 1
             est.mx.jack[,i.succ] <- coef(optimx.out)
