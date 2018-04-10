@@ -161,7 +161,7 @@ glm.prev.cc <- function(data,
                              pc = pc)) # BFGS, Nelder-Mead, CG
 
     if(class(optimx.out) == 'try-error'){ # optimization failed
-        print('optimx did not converge in glm.prev.cc()')
+        print('Optimx did not converge in glm.prev.cc()')
         out <- NULL
     }else if(optimx.out$convcode == 0){ # successfully converged
         ests <- matrix(coef(optimx.out), ncol = 1)
@@ -832,11 +832,11 @@ glm.prev.cc.jack <- function(data,
     N <- i.succ
 
     est.mx.jack <- est.mx.jack[, 1:N]
-    est.mx.full <- matrix(rep(param.vec.fitting.start.values, N), nrow = length(pc$param.vec.fitting.names), ncol = N)
+    est.mx.full <- matrix(param.vec.fitting.start.values, nrow = length(pc$param.vec.fitting.names), ncol = N)
     t.pseudo.mx <- N*est.mx.full - (N-1)*est.mx.jack
 
     t.pseudo.mn <- rowMeans(t.pseudo.mx)
-    t.pseudo.mn.mx <- matrix(rep(t.pseudo.mn), nrow = length(pc$param.vec.fitting.names), ncol = N)
+    t.pseudo.mn.mx <- matrix(t.pseudo.mn, nrow = length(pc$param.vec.fitting.names), ncol = N)
     ses <- sqrt(rowSums((t.pseudo.mx - t.pseudo.mn.mx)^2)/(N*(N-1)))
 
     out <- list(ses = ses, i.succ = i.succ, conv.prop = i.succ/i.iter)
